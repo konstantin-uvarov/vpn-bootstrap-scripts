@@ -81,7 +81,7 @@ check_environment() {
         log_warn "  - VPN won't be accessible from outside this machine"
         log_warn "  - For production, use a cloud VM (GCP, AWS, DigitalOcean)"
         echo "" >&2
-        read -r -p "Continue anyway? [y/N]: " confirm
+        read -r -p "Continue anyway? [y/N]: " confirm </dev/tty
         if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
             log_info "Aborting. Use 'make init' on a cloud VM instead."
             exit 0
@@ -208,7 +208,7 @@ install_compose_plugin() {
 # ============================================================================
 
 prompt_repo_url() {
-    read -r -p "Repository URL [${DEFAULT_REPO}]: " repo_url
+    read -r -p "Repository URL [${DEFAULT_REPO}]: " repo_url </dev/tty
     echo "${repo_url:-$DEFAULT_REPO}"
 }
 
@@ -246,7 +246,7 @@ clone_repository() {
     log_warn "Clone failed. Git output:"
     echo "$clone_output" >&2
     echo "" >&2
-    read -r -p "Enter GitHub personal access token (leave blank to abort): " -s gh_token
+    read -r -p "Enter GitHub personal access token (leave blank to abort): " -s gh_token </dev/tty
     echo "" >&2
 
     if [[ -z "$gh_token" ]]; then
