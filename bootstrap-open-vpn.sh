@@ -175,7 +175,8 @@ install_docker() {
 }
 
 install_compose_plugin() {
-    if docker compose version >/dev/null 2>&1; then
+    # Check if already available (via package or Docker Desktop)
+    if docker compose version >/dev/null 2>&1 || sudo docker compose version >/dev/null 2>&1; then
         log_info "Docker Compose plugin already installed"
         return 0
     fi
@@ -184,21 +185,66 @@ install_compose_plugin() {
     local pkg_manager
     pkg_manager=$(get_package_manager)
 
+    # Try package manager first (may work on some systems)
     case "$pkg_manager" in
         apt)
             sudo apt-get update -qq
-            sudo apt-get install -y docker-compose-plugin
+            sudo apt-get install -y docker-compose-plugin 2>/dev/null || true
             ;;
         yum)
-            sudo yum install -y docker-compose-plugin
+            sudo yum install -y docker-compose-plugin 2>/dev/null || true
             ;;
     esac
 
-    if docker compose version >/dev/null 2>&1; then
-        log_success "Docker Compose plugin installed"
+    # Check if package install worked
+    if docker compose version >/dev/null 2>&1 || sudo docker compose version >/dev/null 2>&1; then
+        log_success "Docker Compose plugin installed via package manager"
+        return 0
+    fi
+
+    # Package not available - download binary directly from GitHub
+    log_info "Package not found, downloading from GitHub releases..."
+
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64) arch="x86_64" ;;
+        aarch64|arm64) arch="aarch64" ;;
+        armv7l) arch="armv7" ;;
+        *)
+            log_error "Unsupported architecture: $arch"
+            exit 1
+            ;;
+    esac
+
+    local os
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+    # Get latest stable version
+    local compose_version="v2.32.4"
+    local download_url="https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-${os}-${arch}"
+
+    log_info "Downloading Docker Compose ${compose_version} for ${os}-${arch}..."
+
+    # Create plugin directory
+    local plugin_dir="/usr/local/lib/docker/cli-plugins"
+    sudo mkdir -p "$plugin_dir"
+
+    # Download and install
+    if sudo curl -fsSL "$download_url" -o "${plugin_dir}/docker-compose"; then
+        sudo chmod +x "${plugin_dir}/docker-compose"
+        log_success "Docker Compose plugin installed to ${plugin_dir}"
     else
-        log_error "Failed to install Docker Compose plugin"
-        log_error "Try manually: sudo apt-get install docker-compose-plugin"
+        log_error "Failed to download Docker Compose from GitHub"
+        log_error "URL: $download_url"
+        exit 1
+    fi
+
+    # Verify installation
+    if docker compose version >/dev/null 2>&1 || sudo docker compose version >/dev/null 2>&1; then
+        log_success "Docker Compose plugin installed successfully"
+    else
+        log_error "Docker Compose installation verification failed"
         exit 1
     fi
 }
