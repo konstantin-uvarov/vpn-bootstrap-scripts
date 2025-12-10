@@ -186,11 +186,28 @@ install_compose_plugin() {
 
     case "$pkg_manager" in
         apt)
+            # Try from default repos first
             sudo apt-get update -qq
-            sudo apt-get install -y docker-compose-plugin
+            if ! sudo apt-get install -y docker-compose-plugin 2>/dev/null; then
+                # Add Docker's official repository
+                log_info "Adding Docker official repository..."
+                sudo apt-get install -y ca-certificates curl gnupg
+                sudo install -m 0755 -d /etc/apt/keyrings
+                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null || true
+                sudo chmod a+r /etc/apt/keyrings/docker.gpg
+                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+                sudo apt-get update -qq
+                sudo apt-get install -y docker-compose-plugin
+            fi
             ;;
         yum)
-            sudo yum install -y docker-compose-plugin
+            # Try default repos first, then add Docker's official repo
+            if ! sudo yum install -y docker-compose-plugin 2>/dev/null; then
+                log_info "Adding Docker official repository..."
+                sudo yum install -y yum-utils
+                sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+                sudo yum install -y docker-compose-plugin
+            fi
             ;;
     esac
 
@@ -198,7 +215,7 @@ install_compose_plugin() {
         log_success "Docker Compose plugin installed"
     else
         log_error "Failed to install Docker Compose plugin"
-        log_error "Try manually: sudo apt-get install docker-compose-plugin"
+        log_error "See: https://docs.docker.com/compose/install/linux/"
         exit 1
     fi
 }
