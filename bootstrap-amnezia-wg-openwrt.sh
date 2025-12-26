@@ -81,9 +81,35 @@ install_awg_packages() {
                  ERR_CODE=$?
                  log_error "Failed to install $FILE_NAME using standard method."
                  
+                 # Check for architecture mismatch
+                 # Constructed Arch from script logic: ${PKGARCH}_${TARGET}_${SUBTARGET}
+                 EXPECTED_ARCH="${PKGARCH}_${TARGET}_${SUBTARGET}"
+                 
+                 if ! opkg print-architecture | grep -q "$EXPECTED_ARCH"; then
+                     printf "${RED}[WARNING]${NC} Installation failed due to architecture mismatch.\n"
+                     printf "Package architecture: $EXPECTED_ARCH\n"
+                     printf "Do you want to add '$EXPECTED_ARCH' to opkg config? [y/N]: "
+                     read ARCH_CHOICE
+                     if [ "$ARCH_CHOICE" = "y" ] || [ "$ARCH_CHOICE" = "Y" ]; then
+                         # Determine priority - usually end of list + 10 or just high number
+                         # Default to 200 to be safe/low priority
+                         ARCH_CONF="/etc/opkg/arch.conf"
+                         if [ -f "/etc/opkg.conf" ] && grep -q "arch " "/etc/opkg.conf"; then
+                             ARCH_CONF="/etc/opkg.conf"
+                         fi
+                         
+                         log_info "Adding 'arch $EXPECTED_ARCH 200' to $ARCH_CONF"
+                         echo "arch $EXPECTED_ARCH 200" >> "$ARCH_CONF"
+                         opkg update >/dev/null 2>&1 # Refresh not strictly needed for local install but good practice
+                     else
+                         log_error "Cannot proceed without matching architecture."
+                         exit 1
+                     fi
+                 fi
+
                  # Check for kernel mismatch heuristic (output likely contains dependency error)
-                 printf "${RED}[WARNING]${NC} Installation failed. This might be due to a kernel version mismatch.\n"
-                 printf "Do you want to force installation? (Recursive force-depends) [y/N]: "
+                 printf "${RED}[WARNING]${NC} We will now attempt to force installation to bypass kernel dependencies.\n"
+                 printf "Do you want to proceed? (Recursive force-depends) [y/N]: "
                  read FORCE_CHOICE
                  if [ "$FORCE_CHOICE" = "y" ] || [ "$FORCE_CHOICE" = "Y" ]; then
                      log_info "Attempting force installation..."
