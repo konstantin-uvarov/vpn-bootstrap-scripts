@@ -82,32 +82,67 @@ install_awg_packages() {
                  log_error "Failed to install $FILE_NAME using standard method."
                  
                  # Check for architecture mismatch
-                 # Constructed Arch from script logic: ${PKGARCH}_${TARGET}_${SUBTARGET}
                  EXPECTED_ARCH="${PKGARCH}_${TARGET}_${SUBTARGET}"
                  
                  if ! opkg print-architecture | grep -q "$EXPECTED_ARCH"; then
                      printf "${RED}[WARNING]${NC} Installation failed due to architecture mismatch.\n"
                      printf "Package architecture: $EXPECTED_ARCH\n"
-                     printf "Do you want to add '$EXPECTED_ARCH' to opkg config? [y/N]: "
+                     printf "Do you want to attempt installation with a temporary config? [y/N]: "
                      read ARCH_CHOICE
                      if [ "$ARCH_CHOICE" = "y" ] || [ "$ARCH_CHOICE" = "Y" ]; then
-                         # Determine priority - usually end of list + 10 or just high number
-                         # Default to 200 to be safe/low priority
-                         ARCH_CONF="/etc/opkg/arch.conf"
-                         if [ -f "/etc/opkg.conf" ] && grep -q "arch " "/etc/opkg.conf"; then
-                             ARCH_CONF="/etc/opkg.conf"
+                         # Create a temp config that includes the new architecture
+                         TEMP_CONF="/tmp/opkg_custom.conf"
+                         
+                         # Copy existing config content (preserving comments and logical structure)
+                         if [ -f "/etc/opkg.conf" ]; then
+                             cat /etc/opkg.conf > "$TEMP_CONF"
+                         else
+                             # Basic fallback if opkg.conf is missing (unlikely but safe)
+                             echo "dest root /" > "$TEMP_CONF"
+                             echo "lists_dir ext /var/opkg-lists" >> "$TEMP_CONF"
+                         fi
+
+                         # If arch.conf exists and is not empty, include it (cat it in)
+                         if [ -f "/etc/opkg/arch.conf" ] && [ -s "/etc/opkg/arch.conf" ]; then
+                              # If opkg.conf already includes it via 'src', we are fine.
+                              # But to be safe, we just append the output of print-architecture formatted as config
+                              # or just append our new arch.
+                              : # Do nothing, assume opkg.conf handles it or we append.
                          fi
                          
-                         log_info "Adding 'arch $EXPECTED_ARCH 200' to $ARCH_CONF"
-                         echo "arch $EXPECTED_ARCH 200" >> "$ARCH_CONF"
-                         opkg update >/dev/null 2>&1 # Refresh not strictly needed for local install but good practice
+                         # Append our new arch
+                         # Assign strict priority? No, just append.
+                         echo "arch $EXPECTED_ARCH 10" >> "$TEMP_CONF"
+                         echo "arch all 1" >> "$TEMP_CONF"
+                         echo "arch $PKGARCH 100" >> "$TEMP_CONF"
+
+                         log_info "Attempting install with temporary config $TEMP_CONF..."
+                         
+                         # Try install with -f
+                         if opkg -f "$TEMP_CONF" install "$AWG_DIR/$FILE_NAME"; then
+                             log_info "$PKG_NAME installed successfully with custom arch."
+                             rm -f "$TEMP_CONF"
+                             return 0
+                         fi
+                         
+                         # If that failed, try force-depends WITH custom config
+                         printf "${RED}[WARNING]${NC} Standard install with custom arch failed. Try force-depends? [y/N]: "
+                         read FORCE_CHOICE
+                         if [ "$FORCE_CHOICE" = "y" ] || [ "$FORCE_CHOICE" = "Y" ]; then
+                             if opkg -f "$TEMP_CONF" install "$AWG_DIR/$FILE_NAME" --force-depends; then
+                                 log_info "$PKG_NAME installed with force-depends and custom arch."
+                                 rm -f "$TEMP_CONF"
+                                 return 0
+                             fi
+                         fi
+                         rm -f "$TEMP_CONF"
                      else
                          log_error "Cannot proceed without matching architecture."
                          exit 1
                      fi
                  fi
 
-                 # Check for kernel mismatch heuristic (output likely contains dependency error)
+                 # Fallback for just kernel mismatch (valid arch)
                  printf "${RED}[WARNING]${NC} We will now attempt to force installation to bypass kernel dependencies.\n"
                  printf "Do you want to proceed? (Recursive force-depends) [y/N]: "
                  read FORCE_CHOICE
