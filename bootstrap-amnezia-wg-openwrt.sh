@@ -89,7 +89,20 @@ install_awg_packages() {
                  log_error "Failed to install $FILE_NAME using standard method."
                  
                  # Check for architecture mismatch
-                 EXPECTED_ARCH="${PKGARCH}_${TARGET}_${SUBTARGET}"
+                 # Derive arch from filename: kmod-amneziawg_vX.Y.Z_ARCH.ipk
+                 # We want ARCH.
+                 # FILE_NAME format: "kmod-amneziawg${PKGPOSTFIX}"
+                 # PKGPOSTFIX format: "_v${VERSION}_${ARCH}.ipk"
+                 
+                 # Strip prefix up to version
+                 # This relies on the filename structure remaining consistent
+                 TEMP_ARCH="${FILE_NAME%.ipk}"
+                 EXPECTED_ARCH="${TEMP_ARCH##*_v${VERSION}_}"
+
+                 # Fallback if extraction fails or looks weird (shouldn't happen with our filenames)
+                 if [ -z "$EXPECTED_ARCH" ] || [ "$EXPECTED_ARCH" = "$FILE_NAME" ]; then
+                      EXPECTED_ARCH="${PKGARCH}_${TARGET}_${SUBTARGET}" # Last resort (old logic)
+                 fi
                  
                  if ! opkg print-architecture | grep -q "$EXPECTED_ARCH"; then
                      printf "${RED}[WARNING]${NC} Installation failed due to architecture mismatch.\n"
