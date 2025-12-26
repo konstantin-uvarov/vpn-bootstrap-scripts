@@ -50,56 +50,68 @@ install_awg_packages() {
     AWG_DIR="/tmp/amneziawg"
     mkdir -p "$AWG_DIR"
 
-    # Install kmod-amneziawg
-    if opkg list-installed | grep -q kmod-amneziawg; then
-        log_info "kmod-amneziawg already installed"
-    else
-        KMOD_AMNEZIAWG_FILENAME="kmod-amneziawg${PKGPOSTFIX}"
-        DOWNLOAD_URL="${BASE_URL}v${VERSION}/${KMOD_AMNEZIAWG_FILENAME}"
-        log_info "Downloading $KMOD_AMNEZIAWG_FILENAME..."
-        wget -O "$AWG_DIR/$KMOD_AMNEZIAWG_FILENAME" "$DOWNLOAD_URL"
-
-        if [ $? -eq 0 ]; then
-            opkg install "$AWG_DIR/$KMOD_AMNEZIAWG_FILENAME" || { log_error "Failed to install kmod-amneziawg"; exit 1; }
-        else
-            log_error "Error downloading kmod-amneziawg. Check your internet or device compatibility."
-            exit 1
+    # Function to generic install
+    do_install() {
+        PKG_NAME=$1
+        FILE_NAME=$2
+        
+        # 1. Check if installed
+        if opkg list-installed | grep -q "^$PKG_NAME"; then
+             log_info "$PKG_NAME already installed"
+             return 0
         fi
-    fi
+
+        # 2. Try repository install first
+        log_info "Attempting to install $PKG_NAME from repository..."
+        if opkg install "$PKG_NAME"; then
+             log_info "$PKG_NAME installed from repository."
+             return 0
+        fi
+        
+        # 3. Download and Install Manual
+        log_info "Repository install failed. Attempting manual download..."
+        DOWNLOAD_URL="${BASE_URL}v${VERSION}/${FILE_NAME}"
+        log_info "Downloading $FILE_NAME..."
+        
+        if wget -O "$AWG_DIR/$FILE_NAME" "$DOWNLOAD_URL"; then
+             log_info "Installing $FILE_NAME..."
+             if opkg install "$AWG_DIR/$FILE_NAME"; then
+                 return 0
+             else
+                 ERR_CODE=$?
+                 log_error "Failed to install $FILE_NAME using standard method."
+                 
+                 # Check for kernel mismatch heuristic (output likely contains dependency error)
+                 printf "${RED}[WARNING]${NC} Installation failed. This might be due to a kernel version mismatch.\n"
+                 printf "Do you want to force installation? (Recursive force-depends) [y/N]: "
+                 read FORCE_CHOICE
+                 if [ "$FORCE_CHOICE" = "y" ] || [ "$FORCE_CHOICE" = "Y" ]; then
+                     log_info "Attempting force installation..."
+                     if opkg install "$AWG_DIR/$FILE_NAME" --force-depends; then
+                         log_info "$PKG_NAME installed with force-depends."
+                         return 0
+                     else
+                         log_error "Force installation of $PKG_NAME failed."
+                         exit 1
+                     fi
+                 else
+                     exit 1
+                 fi
+             fi
+        else
+             log_error "Error downloading $FILE_NAME."
+             exit 1
+        fi
+    }
+
+    # Install kmod-amneziawg
+    do_install "kmod-amneziawg" "kmod-amneziawg${PKGPOSTFIX}"
 
     # Install amneziawg-tools
-    if opkg list-installed | grep -q amneziawg-tools; then
-        log_info "amneziawg-tools already installed"
-    else
-        AMNEZIAWG_TOOLS_FILENAME="amneziawg-tools${PKGPOSTFIX}"
-        DOWNLOAD_URL="${BASE_URL}v${VERSION}/${AMNEZIAWG_TOOLS_FILENAME}"
-        log_info "Downloading $AMNEZIAWG_TOOLS_FILENAME..."
-        wget -O "$AWG_DIR/$AMNEZIAWG_TOOLS_FILENAME" "$DOWNLOAD_URL"
-
-        if [ $? -eq 0 ]; then
-            opkg install "$AWG_DIR/$AMNEZIAWG_TOOLS_FILENAME" || { log_error "Failed to install amneziawg-tools"; exit 1; }
-        else
-            log_error "Error downloading amneziawg-tools."
-            exit 1
-        fi
-    fi
+    do_install "amneziawg-tools" "amneziawg-tools${PKGPOSTFIX}"
 
     # Install LuCI package
-    if opkg list-installed | grep -q "$LUCI_PACKAGE_NAME"; then
-        log_info "$LUCI_PACKAGE_NAME already installed"
-    else
-        LUCI_AMNEZIAWG_FILENAME="${LUCI_PACKAGE_NAME}${PKGPOSTFIX}"
-        DOWNLOAD_URL="${BASE_URL}v${VERSION}/${LUCI_AMNEZIAWG_FILENAME}"
-        log_info "Downloading $LUCI_AMNEZIAWG_FILENAME..."
-        wget -O "$AWG_DIR/$LUCI_AMNEZIAWG_FILENAME" "$DOWNLOAD_URL"
-
-        if [ $? -eq 0 ]; then
-            opkg install "$AWG_DIR/$LUCI_AMNEZIAWG_FILENAME" || { log_error "Failed to install $LUCI_PACKAGE_NAME"; exit 1; }
-        else
-            log_error "Error downloading $LUCI_PACKAGE_NAME."
-            exit 1
-        fi
-    fi
+    do_install "$LUCI_PACKAGE_NAME" "${LUCI_PACKAGE_NAME}${PKGPOSTFIX}"
 
     rm -rf "$AWG_DIR"
     log_info "All packages installed successfully."
