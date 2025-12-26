@@ -26,7 +26,14 @@ install_awg_packages() {
     TARGET=$(ubus call system board | jsonfilter -e '@.release.target' | cut -d '/' -f 1)
     SUBTARGET=$(ubus call system board | jsonfilter -e '@.release.target' | cut -d '/' -f 2)
     VERSION=$(ubus call system board | jsonfilter -e '@.release.version')
-    PKGPOSTFIX="_v${VERSION}_${PKGARCH}_${TARGET}_${SUBTARGET}.ipk"
+    
+    # Avoid double suffix if PKGARCH already contains TARGET_SUBTARGET
+    if echo "$PKGARCH" | grep -q "${TARGET}_${SUBTARGET}"; then
+        PKGPOSTFIX="_v${VERSION}_${PKGARCH}.ipk"
+    else
+        PKGPOSTFIX="_v${VERSION}_${PKGARCH}_${TARGET}_${SUBTARGET}.ipk"
+    fi
+
     BASE_URL="https://github.com/Slava-Shchipunov/awg-openwrt/releases/download/"
 
     # Version Logic
