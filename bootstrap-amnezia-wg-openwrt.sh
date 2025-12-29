@@ -1,42 +1,39 @@
 #!/bin/sh
 
+# AmneziaWG Installer for OpenWrt
+# Based on https://github.com/Slava-Shchipunov/awg-openwrt
+# Packages source: https://github.com/konstantin-uvarov/awg-openwrt
+
 # Colors
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+GREEN='\033[32;1m'
+RED='\033[31;1m'
+NC='\033[0m'
 
-log_info() {
-    printf "${GREEN}[INFO]${NC} $1\n"
-}
-
-log_error() {
-    printf "${RED}[ERROR]${NC} $1\n"
-}
+log_info() { printf "${GREEN}[INFO]${NC} %s\n" "$1"; }
+log_error() { printf "${RED}[ERROR]${NC} %s\n" "$1"; }
 
 check_repo() {
     log_info "Checking OpenWrt repo availability..."
-    opkg update | grep -q "Failed to download" && log_error "opkg failed. Check internet or date. Command for force ntp sync: ntpd -p ptbtime1.ptb.de" && exit 1
+    if opkg update 2>&1 | grep -q "Failed to download"; then
+        log_error "opkg update failed. Check internet or date."
+        log_error "Force NTP sync: ntpd -p ptbtime1.ptb.de"
+        exit 1
+    fi
 }
 
 install_awg_packages() {
-    # Architecture detection
+    # Architecture detection (get highest priority arch)
     PKGARCH=$(opkg print-architecture | awk 'BEGIN {max=0} {if ($3 > max) {max = $3; arch = $2}} END {print arch}')
     
-    # Target detection
+    # Target and version detection
     TARGET=$(ubus call system board | jsonfilter -e '@.release.target' | cut -d '/' -f 1)
     SUBTARGET=$(ubus call system board | jsonfilter -e '@.release.target' | cut -d '/' -f 2)
     VERSION=$(ubus call system board | jsonfilter -e '@.release.version')
     
-    # Avoid double suffix if PKGARCH already contains TARGET_SUBTARGET
-    if echo "$PKGARCH" | grep -q "${TARGET}_${SUBTARGET}"; then
-        PKGPOSTFIX="_v${VERSION}_${PKGARCH}.ipk"
-    else
-        PKGPOSTFIX="_v${VERSION}_${PKGARCH}_${TARGET}_${SUBTARGET}.ipk"
-    fi
-
+    PKGPOSTFIX="_v${VERSION}_${PKGARCH}_${TARGET}_${SUBTARGET}.ipk"
     BASE_URL="https://github.com/konstantin-uvarov/awg-openwrt/releases/download/"
 
-    # Version Logic
+    # Determine AWG protocol version (2.0 for OpenWrt >= 23.05.6 or >= 24.10.3)
     AWG_VERSION="1.0"
     MAJOR_VERSION=$(echo "$VERSION" | cut -d '.' -f 1)
     MINOR_VERSION=$(echo "$VERSION" | cut -d '.' -f 2)
@@ -52,126 +49,111 @@ install_awg_packages() {
         LUCI_PACKAGE_NAME="luci-app-amneziawg"
     fi
 
-    log_info "Detected AWG version: $AWG_VERSION"
+    log_info "OpenWrt version: $VERSION"
+    log_info "Architecture: $PKGARCH ($TARGET/$SUBTARGET)"
+    log_info "AWG protocol version: $AWG_VERSION"
     
     AWG_DIR="/tmp/amneziawg"
     mkdir -p "$AWG_DIR"
 
-    # Function to generic install
-    do_install() {
-        PKG_NAME=$1
-        FILE_NAME=$2
+    # Install package function
+    install_pkg() {
+        PKG_NAME="$1"
+        FILE_NAME="$2"
         
-        # 1. Check if installed
-        if opkg list-installed | grep -q "^$PKG_NAME"; then
-             log_info "$PKG_NAME already installed"
-             return 0
+        if opkg list-installed | grep -q "^${PKG_NAME} "; then
+            log_info "$PKG_NAME is already installed"
+            return 0
         fi
 
-        # 2. Try repository install first
-        log_info "Attempting to install $PKG_NAME from repository..."
-        if opkg install "$PKG_NAME"; then
-             log_info "$PKG_NAME installed from repository."
-             return 0
-        fi
-        
-        # 3. Download and Install Manual
-        log_info "Repository install failed. Attempting manual download..."
         DOWNLOAD_URL="${BASE_URL}v${VERSION}/${FILE_NAME}"
         log_info "Downloading $FILE_NAME..."
         
-        if wget -O "$AWG_DIR/$FILE_NAME" "$DOWNLOAD_URL"; then
-             log_info "Installing $FILE_NAME..."
-             if opkg install "$AWG_DIR/$FILE_NAME"; then
-                 return 0
-             else
-                 log_error "Failed to install $FILE_NAME."
-                 exit 1
-             fi
-        else
-             log_error "Error downloading $FILE_NAME."
-             exit 1
+        if ! wget -q -O "$AWG_DIR/$FILE_NAME" "$DOWNLOAD_URL"; then
+            log_error "Failed to download $FILE_NAME"
+            log_error "URL: $DOWNLOAD_URL"
+            exit 1
         fi
+        
+        log_info "Installing $PKG_NAME..."
+        if ! opkg install "$AWG_DIR/$FILE_NAME"; then
+            log_error "Failed to install $PKG_NAME"
+            exit 1
+        fi
+        
+        log_info "$PKG_NAME installed successfully"
     }
 
-    # Install kmod-amneziawg
-    do_install "kmod-amneziawg" "kmod-amneziawg${PKGPOSTFIX}"
-
-    # Install amneziawg-tools
-    do_install "amneziawg-tools" "amneziawg-tools${PKGPOSTFIX}"
-
-    # Install LuCI package
-    do_install "$LUCI_PACKAGE_NAME" "${LUCI_PACKAGE_NAME}${PKGPOSTFIX}"
+    # Install packages
+    install_pkg "kmod-amneziawg" "kmod-amneziawg${PKGPOSTFIX}"
+    install_pkg "amneziawg-tools" "amneziawg-tools${PKGPOSTFIX}"
+    install_pkg "$LUCI_PACKAGE_NAME" "${LUCI_PACKAGE_NAME}${PKGPOSTFIX}"
 
     rm -rf "$AWG_DIR"
-    log_info "All packages installed successfully."
+    log_info "All AmneziaWG packages installed successfully"
 }
 
 configure_interface() {
-    log_info "Starting Interface Configuration..."
-    
-    # Interface Name Logic
     DEFAULT_IFACE="awg0"
-    while true; do
-        printf "Enter interface name [default: $DEFAULT_IFACE]: "
-        read input_iface
-        INTERFACE_NAME=${input_iface:-$DEFAULT_IFACE}
+    
+    printf "\n${GREEN}Interface Configuration${NC}\n"
+    printf "Enter interface name [%s]: " "$DEFAULT_IFACE"
+    read -r input_iface
+    INTERFACE_NAME="${input_iface:-$DEFAULT_IFACE}"
 
-        if uci get network.$INTERFACE_NAME >/dev/null 2>&1; then
-            printf "Interface '$INTERFACE_NAME' already exists.\n"
-            printf "[O]verwrite, [S]kip, or [A]uto-increment? (o/s/a): "
-            read action
-            case "$action" in
-                o|O) 
-                    log_info "Overwriting '$INTERFACE_NAME'..."
-                    uci delete network.$INTERFACE_NAME
-                    break 
-                    ;;
-                s|S)
-                    log_info "Skipping interface creation."
-                    return 
-                    ;;
-                a|A)
-                    i=0
-                    while uci get network.awg$i >/dev/null 2>&1; do
-                        i=$((i+1))
+    # Check if interface exists
+    if uci -q get network."$INTERFACE_NAME" >/dev/null 2>&1; then
+        printf "Interface '%s' already exists.\n" "$INTERFACE_NAME"
+        printf "[O]verwrite, [S]kip, or [A]uto-increment? (o/s/a): "
+        read -r action
+        case "$action" in
+            o|O)
+                log_info "Removing existing interface '$INTERFACE_NAME'..."
+                uci delete network."$INTERFACE_NAME" 2>/dev/null
+                # Also remove associated peer configs
+                uci show network 2>/dev/null | grep -o "network\.@amneziawg_${INTERFACE_NAME}\[" | \
+                    sed 's/\[$//' | while read -r peer; do
+                        uci delete "$peer" 2>/dev/null
                     done
-                    DEFAULT_IFACE="awg$i"
-                    printf "Suggested new name: $DEFAULT_IFACE\n"
-                    ;;
-                *)
-                    echo "Invalid choice."
-                    ;;
-            esac
-        else
-            break
-        fi
-    done
-
-    # Create Interface
-    printf "Create AmneziaWG interface '$INTERFACE_NAME'? (y/n) [y]: "
-    read proceed
-    proceed=${proceed:-y}
-    
-    if [ "$proceed" = "y" ]; then
-        uci set network.$INTERFACE_NAME=interface
-        uci set network.$INTERFACE_NAME.proto='amneziawg'
-        log_info "Interface '$INTERFACE_NAME' created."
-    else
-        log_info "Skipped interface creation."
-        return
+                ;;
+            s|S)
+                log_info "Skipping interface creation"
+                return 0
+                ;;
+            a|A|*)
+                i=0
+                while uci -q get network.awg$i >/dev/null 2>&1; do
+                    i=$((i + 1))
+                done
+                INTERFACE_NAME="awg$i"
+                log_info "Using auto-incremented name: $INTERFACE_NAME"
+                ;;
+        esac
     fi
-    
-    # Create Firewall Zone
-    ZONE_NAME="${INTERFACE_NAME}_zone"
-    printf "Create firewall zone '$ZONE_NAME' for '$INTERFACE_NAME'? (y/n) [y]: "
-    read create_fw
-    create_fw=${create_fw:-y}
 
-    if [ "$create_fw" = "y" ]; then
-        # Check if zone exists
-        if uci show firewall | grep -q "@zone.*name='$ZONE_NAME'"; then
-             log_info "Firewall zone '$ZONE_NAME' already exists. Skipping creation."
+    # Create interface
+    printf "Create AmneziaWG interface '%s'? (y/n) [y]: " "$INTERFACE_NAME"
+    read -r create_iface
+    create_iface="${create_iface:-y}"
+    
+    if [ "$create_iface" != "y" ] && [ "$create_iface" != "Y" ]; then
+        log_info "Skipping interface creation"
+        return 0
+    fi
+
+    uci set network."$INTERFACE_NAME"=interface
+    uci set network."$INTERFACE_NAME".proto='amneziawg'
+    log_info "Interface '$INTERFACE_NAME' created (proto=amneziawg)"
+
+    # Create firewall zone
+    ZONE_NAME="$INTERFACE_NAME"
+    printf "Create firewall zone '%s'? (y/n) [y]: " "$ZONE_NAME"
+    read -r create_zone
+    create_zone="${create_zone:-y}"
+
+    if [ "$create_zone" = "y" ] || [ "$create_zone" = "Y" ]; then
+        if uci show firewall 2>/dev/null | grep -q "@zone.*name='$ZONE_NAME'"; then
+            log_info "Firewall zone '$ZONE_NAME' already exists"
         else
             uci add firewall zone >/dev/null
             uci set firewall.@zone[-1].name="$ZONE_NAME"
@@ -181,50 +163,58 @@ configure_interface() {
             uci set firewall.@zone[-1].forward='REJECT'
             uci set firewall.@zone[-1].masq='1'
             uci set firewall.@zone[-1].mtu_fix='1'
-            log_info "Firewall zone '$ZONE_NAME' created."
+            log_info "Firewall zone '$ZONE_NAME' created"
         fi
     fi
 
-    # Create Forwarding
-    printf "Configure firewall forwarding (LAN -> $ZONE_NAME)? (y/n) [y]: "
-    read create_fwd
-    create_fwd=${create_fwd:-y}
+    # Create forwarding rule (LAN -> AWG zone)
+    printf "Configure forwarding (lan -> %s)? (y/n) [y]: " "$ZONE_NAME"
+    read -r create_fwd
+    create_fwd="${create_fwd:-y}"
 
-    if [ "$create_fwd" = "y" ]; then
+    if [ "$create_fwd" = "y" ] || [ "$create_fwd" = "Y" ]; then
         FWD_NAME="lan_${ZONE_NAME}"
-        if uci show firewall | grep -q "@forwarding.*name='$FWD_NAME'"; then
-             log_info "Forwarding '$FWD_NAME' already exists. Skipping."
+        if uci show firewall 2>/dev/null | grep -q "@forwarding.*dest='$ZONE_NAME'"; then
+            log_info "Forwarding to '$ZONE_NAME' already exists"
         else
             uci add firewall forwarding >/dev/null
-            uci set firewall.@forwarding[-1].name="$FWD_NAME"
             uci set firewall.@forwarding[-1].src='lan'
             uci set firewall.@forwarding[-1].dest="$ZONE_NAME"
-            log_info "Forwarding LAN -> $ZONE_NAME configured."
+            log_info "Forwarding lan -> $ZONE_NAME configured"
         fi
     fi
-    
+
     uci commit network
     uci commit firewall
-    log_info "Configuration committed."
+    log_info "Configuration saved"
 }
 
-# Main Execution
+# Main
 check_repo
 install_awg_packages
-configure_interface
 
-printf "\n${GREEN}Setup Complete!${NC}\n"
-printf "Next steps:\n"
-printf "1. Go to LuCI -> Network -> Interfaces.\n"
-printf "2. Edit '$INTERFACE_NAME' (or the one you created).\n"
-printf "3. Click 'Load configuration' and upload your AmneziaWG .conf file.\n"
-printf "4. Restart the network to apply changes.\n\n"
+printf "\n${GREEN}Configure AmneziaWG interface now? (y/n) [y]: ${NC}"
+read -r configure_now
+configure_now="${configure_now:-y}"
+
+if [ "$configure_now" = "y" ] || [ "$configure_now" = "Y" ]; then
+    configure_interface
+fi
+
+printf "\n${GREEN}===== Setup Complete =====${NC}\n"
+printf "\nNext steps:\n"
+printf "1. Go to LuCI -> Network -> Interfaces\n"
+printf "2. Edit the AmneziaWG interface (or create new with protocol 'AmneziaWG VPN')\n"
+printf "3. Click 'Load configuration' and import your .conf file\n"
+printf "4. Go to Peers tab -> Edit peer -> Enable 'Route Allowed IPs'\n"
+printf "5. Save & Apply, then restart network\n"
+printf "\nDocumentation: https://docs.amnezia.org/documentation/instructions/openwrt-os-awg/\n\n"
 
 printf "Restart network now? (y/n) [n]: "
-read restart_net
-restart_net=${restart_net:-n}
+read -r restart_net
+restart_net="${restart_net:-n}"
 
-if [ "$restart_net" = "y" ]; then
+if [ "$restart_net" = "y" ] || [ "$restart_net" = "Y" ]; then
     log_info "Restarting network..."
     service network restart
 fi
