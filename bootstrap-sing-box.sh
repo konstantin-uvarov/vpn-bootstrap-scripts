@@ -300,6 +300,7 @@ main() {
     install_package make make
     install_package curl curl
     install_package envsubst gettext-base
+    install_package jq jq
     install_docker
     install_compose_plugin
 
